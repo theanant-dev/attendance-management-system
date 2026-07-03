@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-const DB_NAME = "william_db";
+const DB_NAME = "attendance_management_system";
 
 export let dbInstance: mongoose.Mongoose | null = null;
 let connectingPromise: Promise<mongoose.Mongoose> | null = null;

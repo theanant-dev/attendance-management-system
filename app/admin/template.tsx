@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation";
 import { ChartBar, Users, List, X } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/utils";
+import { signOut, useSession } from "next-auth/react";
+import Image from "next/image";
 
 const navItems = [
     {
@@ -21,6 +23,15 @@ const navItems = [
 ];
 
 function SidebarContent({ pathname }: { pathname: string }) {
+    const { data: session } = useSession();
+    if (!session) {
+        return (
+            <div className="flex h-full flex-col items-center justify-center gap-2">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-t-primary" />
+                <span className="text-sm text-muted-foreground">Loading...</span>
+            </div>
+        );
+    }
     return (
         <div className="flex h-full flex-col bg-background">
             <div className="flex h-14 items-center border-b px-4 md:h-[60px] md:px-6">
@@ -52,6 +63,33 @@ function SidebarContent({ pathname }: { pathname: string }) {
                         );
                     })}
                 </nav>
+
+                <div>
+                    <div className="absolute bottom-14 left-4 flex items-center gap-3 rounded-md py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                        {session?.user?.image && (
+                            <Image
+                                src={session.user.image}
+                                alt={session.user.name || "User"}
+                                width={32}
+                                height={32}
+                                className="h-8 w-8 rounded-full object-cover"
+                            />
+                        )}
+                        <div className="flex flex-col">
+                            <span>{session?.user?.name}</span>
+                            <span className="text-xs text-muted-foreground">{session?.user?.email}</span>
+                            <span className="text-xs text-muted-foreground">({session?.user?.role})</span>
+                        </div>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => signOut({ callbackUrl: "/account" })}
+                    className="flex absolute bottom-4 left-4 w-[calc(100%-2rem)]  items-center gap-3 rounded-md py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                    <X className="size-5" />
+                    Log Out
+                </button>
             </div>
         </div>
     );

@@ -1,11 +1,12 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { useSession } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { LoginForm } from "./(auth)/account/_components/login-form";
 
 type AttendancePunch = {
   type: "IN" | "OUT";
@@ -128,9 +129,7 @@ export default function Home() {
       <main className="flex min-h-screen items-center justify-center bg-muted p-6">
         <section className="flex w-full max-w-sm flex-col items-center gap-5 rounded-lg border bg-card p-6 text-center shadow-sm">
           <h1 className="text-xl font-semibold">Please sign in to continue</h1>
-          <Button>
-            <Link href="/account">Go to Login</Link>
-          </Button>
+          <LoginForm className="w-full" />
         </section>
       </main>
     );
@@ -253,6 +252,13 @@ export default function Home() {
           </div>
         </div>
       )}
+      <button
+        type="button"
+        onClick={() => signOut({ callbackUrl: "/account" })}
+        className="fixed top-4 right-4 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition hover:opacity-90"
+      >
+        Logout
+      </button>
     </main>
   );
 }

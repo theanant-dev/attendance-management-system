@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { LoginForm } from "./(auth)/account/_components/login-form";
 import { formatPunchTime } from "@/lib/india-date";
-
+import { toast } from "sonner";
 type AttendancePunch = {
   type: "IN" | "OUT";
   timestamp: string;
@@ -17,6 +17,75 @@ type AttendanceRecord = {
   currentStatus: "IN" | "OUT";
   punches: AttendancePunch[];
 };
+
+type UserLocation = {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+};
+
+const LAB_LOCATION = {
+  latitude: 25.5999947,
+  longitude: 85.1603588,
+};
+const MAX_ATTENDANCE_DISTANCE_METERS = 50;
+
+function getDistanceInMeters(
+  firstLocation: { latitude: number; longitude: number },
+  secondLocation: { latitude: number; longitude: number }
+) {
+  const earthRadiusMeters = 6371000;
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const lat1 = toRadians(firstLocation.latitude);
+  const lat2 = toRadians(secondLocation.latitude);
+  const deltaLat = toRadians(secondLocation.latitude - firstLocation.latitude);
+  const deltaLon = toRadians(secondLocation.longitude - firstLocation.longitude);
+  const haversine =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(lat1) *
+    Math.cos(lat2) *
+    Math.sin(deltaLon / 2) *
+    Math.sin(deltaLon / 2);
+
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+function requestCurrentLocation() {
+  return new Promise<UserLocation>((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Location is not supported in this browser."));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        });
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          reject(new Error("Location permission was denied. Please allow location access and try again."));
+          return;
+        }
+
+        if (error.code === error.POSITION_UNAVAILABLE) {
+          reject(new Error("Your location is unavailable right now. Please turn on GPS/location and try again."));
+          return;
+        }
+
+        reject(new Error("Location request timed out. Please try again."));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      }
+    );
+  });
+}
 
 function formatDisplayDate(dateValue?: string) {
   if (!dateValue) return "Today";
@@ -54,6 +123,8 @@ export default function Home() {
   const [pendingStatus, setPendingStatus] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isFetchingAttendance, setIsFetchingAttendance] = useState(true);
+  const [locationMessage, setLocationMessage] = useState("");
+  const [lastDistance, setLastDistance] = useState<number | null>(null);
   const { data: session, status } = useSession();
   const router = useRouter();
 
@@ -144,14 +215,31 @@ export default function Home() {
 
   async function confirmStatusChange() {
     setIsSaving(true);
+    setLocationMessage("Requesting location permission...");
+    setLastDistance(null);
+    toast.info("Please allow location permission to mark attendance.");
 
     try {
+      const userLocation = await requestCurrentLocation();
+      const distance = getDistanceInMeters(userLocation, LAB_LOCATION);
+
+      setLastDistance(distance);
+      toast.info(`Checking distance from lab: ${Math.round(distance)}m.`);
+
+      if (distance > MAX_ATTENDANCE_DISTANCE_METERS) {
+        throw new Error(
+          `You are ${Math.round(distance)}m away from the lab. Attendance is allowed only within ${MAX_ATTENDANCE_DISTANCE_METERS}m.`
+        );
+      }
+
+      setLocationMessage(`Location verified: ${Math.round(distance)}m from lab.`);
+
       const response = await fetch("/api/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           isMarkingIn: pendingStatus,
-          location: null,
+          location: userLocation,
         }),
       });
 
@@ -163,9 +251,14 @@ export default function Home() {
 
       setAttendance(result.data || null);
       setIsAlertOpen(false);
+      toast.success(`Attendance marked ${pendingStatus ? "In" : "Out"} successfully.`);
     } catch (error) {
       console.error("Error updating status:", error);
-      alert(error instanceof Error ? error.message : "Failed to update status. Please try again.");
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to update status. Please try again.";
+
+      setLocationMessage(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setIsSaving(false);
     }
@@ -173,6 +266,12 @@ export default function Home() {
 
   function cancelStatusChange() {
     setIsAlertOpen(false);
+  }
+
+  function showLocationPermissionHelp() {
+    toast.info(
+      "Reset location permission from browser site settings, then refresh. Chrome: address bar icon > Site settings > Location."
+    );
   }
 
   return (
@@ -214,6 +313,22 @@ export default function Home() {
         >
           {isFetchingAttendance ? "Loading..." : actionLabel}
         </button>
+
+        <div className="w-full space-y-2 text-left">
+          {locationMessage && (
+            <p className="rounded-md border bg-background px-3 py-2 text-xs text-muted-foreground">
+              {locationMessage}
+              {lastDistance !== null && ` Distance: ${Math.round(lastDistance)}m.`}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={showLocationPermissionHelp}
+            className="w-full rounded-md border px-4 py-2 text-sm font-medium transition hover:bg-muted"
+          >
+            Reset location permission help
+          </button>
+        </div>
       </section>
 
       {isAlertOpen && (
@@ -224,7 +339,8 @@ export default function Home() {
             </h2>
             <p className="mb-6 text-sm text-muted-foreground">
               Are you sure you want to mark your attendance as{" "}
-              <strong>{pendingStatus ? "In" : "Out"}</strong>?
+              <strong>{pendingStatus ? "In" : "Out"}</strong>? Your current
+              location will be checked and must be within 50m of the lab.
             </p>
 
             <div className="flex justify-end gap-3">

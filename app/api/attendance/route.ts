@@ -6,6 +6,12 @@ import connectDB from "@/db/mongodb";
 import { authOptions } from "../auth/[...nextauth]/options";
 import { getDateKey } from "@/lib/india-date";
 
+const LAB_LOCATION = {
+    latitude: 25.5999947,
+    longitude: 85.1603588,
+};
+const MAX_ATTENDANCE_DISTANCE_METERS = 50;
+
 function getErrorMessage(error: unknown) {
     if (error instanceof Error) {
         return error.message;
@@ -14,7 +20,53 @@ function getErrorMessage(error: unknown) {
     return "Unknown error";
 }
 
-async function getAuthenticatedUserId() {
+function getDistanceInMeters(
+    firstLocation: { latitude: number; longitude: number },
+    secondLocation: { latitude: number; longitude: number }
+) {
+    const earthRadiusMeters = 6371000;
+    const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+    const lat1 = toRadians(firstLocation.latitude);
+    const lat2 = toRadians(secondLocation.latitude);
+    const deltaLat = toRadians(secondLocation.latitude - firstLocation.latitude);
+    const deltaLon = toRadians(secondLocation.longitude - firstLocation.longitude);
+    const haversine =
+        Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+        Math.cos(lat1) *
+        Math.cos(lat2) *
+        Math.sin(deltaLon / 2) *
+        Math.sin(deltaLon / 2);
+
+    return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+function isValidLocation(location: unknown): location is {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+} {
+    if (!location || typeof location !== "object") {
+        return false;
+    }
+
+    const maybeLocation = location as {
+        latitude?: unknown;
+        longitude?: unknown;
+        accuracy?: unknown;
+    };
+
+    return (
+        typeof maybeLocation.latitude === "number" &&
+        typeof maybeLocation.longitude === "number" &&
+        Number.isFinite(maybeLocation.latitude) &&
+        Number.isFinite(maybeLocation.longitude) &&
+        (maybeLocation.accuracy === undefined ||
+            (typeof maybeLocation.accuracy === "number" &&
+                Number.isFinite(maybeLocation.accuracy)))
+    );
+}
+
+async function getAuthenticatedUser() {
     const session = await getServerSession(authOptions);
 
     if (!session?.user) {
@@ -25,14 +77,14 @@ async function getAuthenticatedUserId() {
         throw new Error("Missing userId");
     }
 
-    return session.user._id;
+    return session.user;
 }
 
 export async function GET() {
     try {
-        const userId = await getAuthenticatedUserId();
+        const user = await getAuthenticatedUser();
 
-        if (!userId) {
+        if (!user) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
@@ -40,7 +92,7 @@ export async function GET() {
 
         const today = getDateKey();
         const attendance = await Attendance.findOne({
-            userId: new mongoose.Types.ObjectId(userId),
+            userId: new mongoose.Types.ObjectId(user._id),
             date: today,
         }).lean();
 
@@ -53,9 +105,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
     try {
-        const userId = await getAuthenticatedUserId();
+        const user = await getAuthenticatedUser();
 
-        if (!userId) {
+        if (!user) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
@@ -64,11 +116,29 @@ export async function POST(request: Request) {
         const body = await request.json();
         const { isMarkingIn, location } = body;
 
+        if (!isValidLocation(location)) {
+            return NextResponse.json(
+                { error: "Location permission is required to mark attendance." },
+                { status: 400 }
+            );
+        }
+
+        const distance = getDistanceInMeters(location, LAB_LOCATION);
+
+        if (distance > MAX_ATTENDANCE_DISTANCE_METERS) {
+            return NextResponse.json(
+                {
+                    error: `You are ${Math.round(distance)}m away from the lab. Attendance is allowed only within ${MAX_ATTENDANCE_DISTANCE_METERS}m.`,
+                },
+                { status: 403 }
+            );
+        }
+
         const today = getDateKey();
         const newStatus = isMarkingIn ? "IN" : "OUT";
 
         const existingAttendance = await Attendance.findOne({
-            userId: new mongoose.Types.ObjectId(userId),
+            userId: new mongoose.Types.ObjectId(user._id),
             date: today,
         });
 
@@ -90,15 +160,17 @@ export async function POST(request: Request) {
 
         const updatedAttendance = await Attendance.findOneAndUpdate(
             {
-                userId: new mongoose.Types.ObjectId(userId),
+                userId: new mongoose.Types.ObjectId(user._id),
                 date: today,
             },
             {
                 $set: { currentStatus: newStatus },
                 $push: { punches: newPunch },
                 $setOnInsert: {
-                    userId: new mongoose.Types.ObjectId(userId),
+                    userId: new mongoose.Types.ObjectId(user._id),
                     date: today,
+                    name: user.name || "User",
+                    email: user.email || "",
                 },
             },
             {
